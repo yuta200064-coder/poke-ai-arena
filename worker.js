@@ -2,7 +2,7 @@ const OFFICIAL = "https://www.pokemon-card.com";
 const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#07111c">
-<title>Poké AI Arena v0.11.9</title>
+<title>Poké AI Arena v0.12.0</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:#050b12;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden}
 #app{height:100dvh;display:flex;flex-direction:column}.top{height:45px;padding:calc(5px + env(safe-area-inset-top)) 12px 5px;background:#08111c;display:flex;align-items:center;justify-content:space-between}.top button{background:#1d2b3d;color:#fff;border:0;border-radius:9px;padding:7px 10px}
@@ -48,7 +48,7 @@ const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 .bench .card{box-shadow:0 2px 7px #0009}
 @media(max-height:700px){.handbox{height:18dvh;min-height:116px}.hc{min-width:64px;width:64px;height:92px}.actions button{width:48px;height:48px}}
 </style></head><body>
-<div id=app><div class=top><b>Poké AI Arena <small>v0.11.9</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
+<div id=app><div class=top><b>Poké AI Arena <small>v0.12.0</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
 <div class=mat><div class=mid></div><div class=stadium>STADIUM</div>
 <div class="sideCount aiSide">SIDE<br><b id=aSideN>6</b></div><div class="sideCount pSide">SIDE<br><b id=pSideN>6</b></div>
 <div class="zone battle" id=aBattle>Battle</div><div class="zone battle" id=pBattle>Battle</div>
@@ -268,22 +268,17 @@ async function deckDebugApi(url){
      "Accept":"text/html,application/xhtml+xml","Accept-Language":"ja-JP,ja;q=0.9"
    }});
    const h=await res.text();
-   const lines=h.split(/\r?\n/);
-   const pcg=[], quantity=[], numeric=[];
-   for(let i=0;i<lines.length;i++){
-     const raw=lines[i], s=raw.trim();
-     if(/PCGDECK\./.test(s) && !/searchItem(?:Name|NameAlt|CardPict)/.test(s))
-       pcg.push({line:i+1,text:s.replace(/\s+/g," ").slice(0,1000)});
-     if(/(?:count|num|quantity|qty|deckCard|cardList|selected|itemCount|cardCount)/i.test(s) &&
-        !/searchItem(?:Name|NameAlt|CardPict)/.test(s))
-       quantity.push({line:i+1,text:s.replace(/\s+/g," ").slice(0,1000)});
-     if(/\b(?:50396|47847|50400|47315|49346)\b/.test(s) &&
-        !/searchItem(?:Name|NameAlt|CardPict)/.test(s))
-       numeric.push({line:i+1,text:s.replace(/\s+/g," ").slice(0,1000)});
-   }
-   return json({ok:true,version:"0.11.9-deck-state",status:res.status,
-     pcgdeckNonSearch:pcg.slice(0,120),quantityClues:quantity.slice(0,120),
-     knownCardIdClues:numeric.slice(0,120)});
+   const marker=/\<section\b[^>]*id=["']cardListView["'][^>]*\>/i.exec(h);
+   if(!marker) return json({ok:false,version:"0.12.0-cardlist",error:"cardListView not found"},422);
+   const a=marker.index, tail=h.slice(a);
+   const next=tail.slice(marker[0].length).search(/<\/section>/i);
+   const section=next>=0 ? tail.slice(0,marker[0].length+next+10) : tail.slice(0,20000);
+   const compact=section.replace(/\s+/g," ");
+   const attrs=[...section.matchAll(/\b(?:data-[\w-]+|name|id|class|value|src|href)=["'][^"']*["']/gi)].map(m=>m[0]);
+   const nums=[...new Set((section.match(/\b\d{1,6}\b/g)||[]))].slice(0,250);
+   return json({ok:true,version:"0.12.0-cardlist",status:res.status,
+     sectionBytes:section.length,attributes:attrs.slice(0,250),
+     numbers:nums,htmlPreview:compact.slice(0,14000)});
  }catch(e){return json({ok:false,error:String(e&&e.message||e)},500);}
 }
 
