@@ -2,7 +2,7 @@ const OFFICIAL = "https://www.pokemon-card.com";
 const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#07111c">
-<title>Poké AI Arena v0.11.1</title>
+<title>Poké AI Arena v0.11.2</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:#050b12;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden}
 #app{height:100dvh;display:flex;flex-direction:column}.top{height:45px;padding:calc(5px + env(safe-area-inset-top)) 12px 5px;background:#08111c;display:flex;align-items:center;justify-content:space-between}.top button{background:#1d2b3d;color:#fff;border:0;border-radius:9px;padding:7px 10px}
@@ -260,71 +260,123 @@ async function deckApi(url){
  if(!/^[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+$/.test(code))
    return json({ok:false,error:"デッキコードの形式が正しくありません"},400);
 
- const target=`${OFFICIAL}/deck/confirm.html/deckID/${encodeURIComponent(code)}/`;
- let res;
- try{
-   res=await fetch(target,{headers:{
-     "User-Agent":"Mozilla/5.0 (compatible; PokeAIArena/0.11.1)",
-     "Accept":"text/html,application/xhtml+xml",
-     "Accept-Language":"ja-JP,ja;q=0.9"
-   }});
- }catch(e){return json({ok:false,error:"公式デッキページへの接続に失敗しました"},502)}
- if(!res.ok)return json({ok:false,error:`公式サイトが HTTP ${res.status} を返しました`},502);
- const h=await res.text();
-
- // Extract card IDs first. Never fabricate a deck if the page format is unknown.
- const ids=[...h.matchAll(/card-search\/details\.php\/card\/(\d+)/g)].map(m=>m[1]);
- const uniq=[...new Set(ids)];
- const cards=[];
-
- for(const cardId of uniq){
-   const positions=[];
-   let p=0, needle=`card-search/details.php/card/${cardId}`;
-   while((p=h.indexOf(needle,p))!==-1){positions.push(p);p+=needle.length}
-   if(!positions.length)continue;
-
-   // Inspect local blocks for explicit name/count metadata.
-   let best=null;
-   for(const pos of positions){
-     const block=h.slice(Math.max(0,pos-1800),Math.min(h.length,pos+2600));
-     const nameCandidates=[
-       ...[...block.matchAll(/alt=["']([^"']+)["']/gi)].map(x=>clean(x[1])),
-       ...[...block.matchAll(/title=["']([^"']+)["']/gi)].map(x=>clean(x[1]))
-     ].filter(x=>x && !/画像|カード画像|logo|icon/i.test(x) && x.length<80);
-
-     const countMatches=[
-       block.match(/(?:枚数|count|quantity|num)[^0-9]{0,80}([1-4])(?:\s*枚)?/i),
-       block.match(/([1-4])\s*枚/)
-     ].filter(Boolean);
-
-     if(nameCandidates.length && countMatches.length){
-       const name=nameCandidates[nameCandidates.length-1];
-       const count=Number(countMatches[0][1]);
-       if(name && count>=1 && count<=4){best={name,count};break}
-     }
+ // The official site currently exposes deck codes through both result.html and
+ // confirm.html. result.html is tried first because its list view contains the
+ // human-readable card rows; confirm.html is retained as a compatibility fallback.
+ const targets=[
+   `${OFFICIAL}/deck/result.html/deckID/${encodeURIComponent(code)}/`,
+   `${OFFICIAL}/deck/confirm.html/deckID/${encodeURIComponent(code)}/`
+ ];
+ let lastStatus=0, diagnostics=[];
+ for(const target of targets){
+   let res;
+   try{
+     res=await fetch(target,{redirect:"follow",headers:{
+       "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+       "Accept":"text/html,application/xhtml+xml",
+       "Accept-Language":"ja-JP,ja;q=0.9"
+     }});
+   }catch(e){diagnostics.push({target,error:"fetch"});continue}
+   lastStatus=res.status;
+   if(!res.ok){diagnostics.push({target,http:res.status});continue}
+   const h=await res.text();
+   const parsed=parseOfficialDeckHtml(h);
+   diagnostics.push({target,htmlBytes:h.length,rows:parsed.cards.length,total:parsed.total,method:parsed.method});
+   if(parsed.total===60){
+     return json({ok:true,code,total:60,cards:parsed.cards,officialDeckUrl:target,parser:parsed.method});
    }
-   if(best)cards.push({name:best.name,count:best.count,cardId,officialUrl:`${OFFICIAL}/card-search/details.php/card/${cardId}/`});
  }
+ return json({ok:false,error:"公式ページには接続できましたが、60枚を確実に解析できませんでした。誤ったデッキには置き換えません。",diagnostic:{lastStatus,attempts:diagnostics}},422);
+}
 
- // Fallback parser for deck-page JS/JSON-ish structures, still requiring explicit count/name/id.
- if(!cards.length){
-   const rx=/"(?:card_id|cardId)"\s*:\s*"?(\d+)"?[\s\S]{0,700}?"(?:card_name|cardName|name)"\s*:\s*"([^"]+)"[\s\S]{0,500}?"(?:count|num|quantity)"\s*:\s*"?([1-4])"?/g;
-   let m;
-   while((m=rx.exec(h)))cards.push({cardId:m[1],name:decodeHtml(m[2]),count:Number(m[3]),officialUrl:`${OFFICIAL}/card-search/details.php/card/${m[1]}/`});
+function parseOfficialDeckHtml(h){
+ const attempts=[parseDeckFromVisibleLines(h),parseDeckFromDataAttributes(h),parseDeckFromJsonish(h)];
+ for(const a of attempts)if(a.total===60)return a;
+ return attempts.sort((a,b)=>b.total-a.total)[0]||{cards:[],total:0,method:"none"};
+}
+
+function categoryKind(s){
+ if(/^ポケモン(?:\s|\(|$)/.test(s))return "pokemon";
+ if(/^グッズ(?:\s|\(|$)/.test(s))return "item";
+ if(/^ポケモンのどうぐ(?:\s|\(|$)/.test(s))return "tool";
+ if(/^サポート(?:\s|\(|$)/.test(s))return "supporter";
+ if(/^スタジアム(?:\s|\(|$)/.test(s))return "stadium";
+ if(/エネルギー(?:\s|\(|$)/.test(s))return "energy";
+ return null;
+}
+function looksSet(s){return /^[A-Z]{1,4}[0-9A-Za-z]{0,4}$/.test(s)||/^[A-Z]{1,4}\d+[a-z]?$/i.test(s)}
+function looksNumber(s){return /^\d{1,3}\/\d{1,3}(?:\s*[A-Z]+)?$/i.test(s)||/^\d{1,4}$/.test(s)}
+function badName(s){return !s||s.length>80||/^(?:\||[-–—]+|リスト表示|画像表示|保存されたデッキ|デッキ表示|枚数|デッキコード|TO PAGE TOP)$/i.test(s)||categoryKind(s)}
+
+function parseDeckFromVisibleLines(h){
+ // Remove executable/style content, then preserve element boundaries as newlines.
+ let t=h.replace(/<script\b[\s\S]*?<\/script>/gi,"\n").replace(/<style\b[\s\S]*?<\/style>/gi,"\n");
+ t=t.replace(/<(?:br|\/p|\/li|\/div|\/td|\/th|\/tr|\/dd|\/dt|\/h[1-6])\b[^>]*>/gi,"\n");
+ t=decodeHtml(t.replace(/<[^>]+>/g,"\n"));
+ const lines=t.split(/\r?\n/).map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean);
+ const cards=[]; let kind=null;
+ for(let i=0;i<lines.length;i++){
+   const ck=categoryKind(lines[i]); if(ck){kind=ck;continue}
+   // Official list rows end in e.g. "| 4枚". Also accept a bare 1-4枚 line.
+   const cm=lines[i].match(/(?:^|\|\s*)([1-4])\s*枚\s*$/); if(!cm||!kind)continue;
+   const count=Number(cm[1]);
+   let set="",number="",name="";
+   const before=[];
+   for(let j=i-1;j>=0&&j>=i-7;j--){
+     if(categoryKind(lines[j]))break;
+     if(/^[1-4]\s*枚$/.test(lines[j]))break;
+     before.unshift(lines[j]);
+   }
+   // Typical Pokémon row: name / set / collection number / | N枚.
+   // Trainer/energy rows may contain only name / | N枚.
+   for(let j=before.length-1;j>=0;j--){
+     const s=before[j].replace(/^\|\s*/,"").trim();
+     if(!number&&looksNumber(s)){number=s;continue}
+     if(!set&&looksSet(s)){set=s;continue}
+     if(!badName(s)){name=s;break}
+   }
+   if(name)cards.push({name,count,kind,set,number,cardId:"",officialUrl:""});
  }
+ return finish(cards,"visible-lines");
+}
 
- // Merge duplicates by exact card id.
- const merged=new Map();
+function parseDeckFromDataAttributes(h){
+ const cards=[];
+ // Covers common server-rendered/data-* representations without guessing names.
+ const tags=[...h.matchAll(/<[^>]+(?:data-(?:card-?name|name)|class=["'][^"']*(?:deck|card)[^"']*)[^>]*>/gi)].map(m=>m[0]);
+ for(const tag of tags){
+   const nameM=tag.match(/data-(?:card-?name|name)=["']([^"']+)["']/i);
+   const countM=tag.match(/data-(?:count|num|quantity)=["']?([1-4])["']?/i);
+   if(!nameM||!countM)continue;
+   const idM=tag.match(/data-(?:card-?id|id)=["']?(\d+)["']?/i);
+   const setM=tag.match(/data-(?:set|expansion)=["']([^"']+)["']/i);
+   const noM=tag.match(/data-(?:number|collection-?no)=["']([^"']+)["']/i);
+   cards.push({name:decodeHtml(nameM[1]),count:Number(countM[1]),kind:null,set:setM?decodeHtml(setM[1]):"",number:noM?decodeHtml(noM[1]):"",cardId:idM?idM[1]:"",officialUrl:idM?`${OFFICIAL}/card-search/details.php/card/${idM[1]}/`:""});
+ }
+ return finish(cards,"data-attributes");
+}
+
+function parseDeckFromJsonish(h){
+ const cards=[];
+ const patterns=[
+  /["'](?:card_name|cardName|name)["']\s*:\s*["']([^"']+)["'][\s\S]{0,500}?["'](?:count|num|quantity)["']\s*:\s*["']?([1-4])["']?/g,
+  /["'](?:count|num|quantity)["']\s*:\s*["']?([1-4])["']?[\s\S]{0,500}?["'](?:card_name|cardName|name)["']\s*:\s*["']([^"']+)["']/g
+ ];
+ let m;
+ while((m=patterns[0].exec(h)))cards.push({name:decodeHtml(m[1]),count:Number(m[2]),kind:null,set:"",number:"",cardId:"",officialUrl:""});
+ while((m=patterns[1].exec(h)))cards.push({name:decodeHtml(m[2]),count:Number(m[1]),kind:null,set:"",number:"",cardId:"",officialUrl:""});
+ return finish(cards,"jsonish");
+}
+function finish(cards,method){
+ // Merge only exact same identity; do not merge same-name cards from different sets.
+ const map=new Map();
  for(const c of cards){
-   if(!merged.has(c.cardId))merged.set(c.cardId,c);
+   if(!c.name||c.count<1||c.count>4)continue;
+   const key=[c.name,c.set||"",c.number||"",c.kind||""].join("|");
+   if(!map.has(key))map.set(key,{...c}); else map.get(key).count+=c.count;
  }
- const out=[...merged.values()];
- const total=out.reduce((s,c)=>s+c.count,0);
-
- if(total!==60){
-   return json({ok:false,error:`公式ページには接続できましたが、60枚を確実に解析できませんでした（${total}枚）。誤ったデッキには置き換えません。`,diagnostic:{uniqueCardIds:uniq.length,parsedCards:out.length,total}},422);
- }
- return json({ok:true,code,total,cards:out,officialDeckUrl:target});
+ const out=[...map.values()];
+ return {cards:out,total:out.reduce((s,c)=>s+c.count,0),method};
 }
 function json(v,status=200){
  return new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
