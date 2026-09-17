@@ -2,7 +2,7 @@ const OFFICIAL = "https://www.pokemon-card.com";
 const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#07111c">
-<title>Poké AI Arena v0.11.6</title>
+<title>Poké AI Arena v0.11.7</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:#050b12;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden}
 #app{height:100dvh;display:flex;flex-direction:column}.top{height:45px;padding:calc(5px + env(safe-area-inset-top)) 12px 5px;background:#08111c;display:flex;align-items:center;justify-content:space-between}.top button{background:#1d2b3d;color:#fff;border:0;border-radius:9px;padding:7px 10px}
@@ -48,7 +48,7 @@ const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 .bench .card{box-shadow:0 2px 7px #0009}
 @media(max-height:700px){.handbox{height:18dvh;min-height:116px}.hc{min-width:64px;width:64px;height:92px}.actions button{width:48px;height:48px}}
 </style></head><body>
-<div id=app><div class=top><b>Poké AI Arena <small>v0.11.6</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
+<div id=app><div class=top><b>Poké AI Arena <small>v0.11.7</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
 <div class=mat><div class=mid></div><div class=stadium>STADIUM</div>
 <div class="sideCount aiSide">SIDE<br><b id=aSideN>6</b></div><div class="sideCount pSide">SIDE<br><b id=pSideN>6</b></div>
 <div class="zone battle" id=aBattle>Battle</div><div class="zone battle" id=pBattle>Battle</div>
@@ -267,29 +267,17 @@ async function deckDebugApi(url){
      "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
      "Accept":"text/html,application/xhtml+xml","Accept-Language":"ja-JP,ja;q=0.9"
    }});
-   const h=await res.text(), scripts=[], urls=[], clues=[];
-   let i=0;
-   for(const m of h.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)){
-     i++;
-     const attrs=m[1]||"", body=m[2]||"";
-     const src=(attrs.match(/\bsrc=["']([^"']+)["']/i)||[])[1]||"";
-     if(src) scripts.push({i,src});
-     if(body){
-       for(const u of body.matchAll(/(?:https?:\/\/|\/)[^"'`\s<>]{3,220}/g)){
-         const s=u[0];
-         if(/deck|card|api|ajax|json|php/i.test(s) && !urls.includes(s)) urls.push(s);
-       }
-       const lines=body.split(/\r?\n/).map(x=>x.trim()).filter(x=>/deck|card|ajax|api|json|deckID/i.test(x));
-       for(const line of lines){
-         let s=line.replace(/\s+/g," ");
-         if(s.length>500)s=s.slice(0,500)+"…";
-         if(!clues.includes(s)) clues.push(s);
-         if(clues.length>=80) break;
-       }
-     }
-   }
-   return json({ok:true,version:"0.11.6-scripts",status:res.status,
-     scriptCount:i,externalScripts:scripts,possibleUrls:urls.slice(0,80),scriptClues:clues.slice(0,80)});
+   const h=await res.text();
+   const hits=[...h.matchAll(/\/assets\/images\/card_images\/large\/[^"'`\s<>\\]+?\.jpg/gi)].map(m=>m[0]);
+   const counts={};
+   for(const u of hits) counts[u]=(counts[u]||0)+1;
+   const cards=Object.entries(counts).map(([image,occurrences])=>{
+     const file=image.split("/").pop().replace(/\.jpg$/i,"");
+     const parts=file.split("_");
+     return {image,occurrences,set:image.split("/").slice(-2,-1)[0],number:parts[0]||"",file};
+   });
+   return json({ok:true,version:"0.11.7-card-images",status:res.status,
+     totalImageOccurrences:hits.length,uniqueCardImages:cards.length,cards});
  }catch(e){return json({ok:false,error:String(e&&e.message||e)},500);}
 }
 
