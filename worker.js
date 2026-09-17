@@ -2,7 +2,7 @@ const OFFICIAL = "https://www.pokemon-card.com";
 const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#07111c">
-<title>Poké AI Arena v0.11.4</title>
+<title>Poké AI Arena v0.11.5</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:#050b12;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden}
 #app{height:100dvh;display:flex;flex-direction:column}.top{height:45px;padding:calc(5px + env(safe-area-inset-top)) 12px 5px;background:#08111c;display:flex;align-items:center;justify-content:space-between}.top button{background:#1d2b3d;color:#fff;border:0;border-radius:9px;padding:7px 10px}
@@ -48,7 +48,7 @@ const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 .bench .card{box-shadow:0 2px 7px #0009}
 @media(max-height:700px){.handbox{height:18dvh;min-height:116px}.hc{min-width:64px;width:64px;height:92px}.actions button{width:48px;height:48px}}
 </style></head><body>
-<div id=app><div class=top><b>Poké AI Arena <small>v0.11.4</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
+<div id=app><div class=top><b>Poké AI Arena <small>v0.11.5</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
 <div class=mat><div class=mid></div><div class=stadium>STADIUM</div>
 <div class="sideCount aiSide">SIDE<br><b id=aSideN>6</b></div><div class="sideCount pSide">SIDE<br><b id=pSideN>6</b></div>
 <div class="zone battle" id=aBattle>Battle</div><div class="zone battle" id=pBattle>Battle</div>
@@ -268,41 +268,28 @@ async function deckDebugApi(url){
      "Accept":"text/html,application/xhtml+xml","Accept-Language":"ja-JP,ja;q=0.9"
    }});
    const h=await res.text();
-   const hits=[];
-   const patterns=[
-     /<[^>]*(?:card|deck|pokemon|goods|support|stadium|energy)[^>]*>/gi,
-     /(?:card|deck|pokemon|goods|support|stadium|energy)[A-Za-z0-9_$.-]*\s*[:=]\s*(?:"[^"]{0,300}"|'[^']{0,300}'|\[[\s\S]{0,500}?\]|\{[\s\S]{0,500}?\})/gi,
-     /(?:カード名|ポケモン|グッズ|どうぐ|サポート|スタジアム|エネルギー)[\s\S]{0,500}/g
-   ];
-   for(const rx of patterns){
-     let m;
-     while((m=rx.exec(h)) && hits.length<100){
-       let s=m[0].replace(/\s+/g," ").trim();
-       if(s.length>700)s=s.slice(0,700)+"…";
-       if(!hits.includes(s))hits.push(s);
+   const inputs=[];
+   for(const m of h.matchAll(/<input\b[^>]*>/gi)){
+     const tag=m[0], a={};
+     for(const k of ["type","name","id","value","class"]){
+       const x=tag.match(new RegExp("\\\\b"+k+"=[\\\"']([^\\\"']*)[\\\"']","i"));
+       if(x)a[k]=decodeHtml(x[1]);
      }
+     inputs.push(a);
    }
-   const attrs={};
-   for(const m of h.matchAll(/\b(?:data-[\w-]+|class|id|name|value|href|src)=["']([^"']*)["']/gi)){
-     const whole=m[0];
-     if(/card|deck|pokemon|goods|support|stadium|energy|枚/i.test(whole)){
-       const key=whole.slice(0,whole.indexOf("=")).toLowerCase();
-       attrs[key]=(attrs[key]||0)+1;
-     }
+   const textareas=[];
+   for(const m of h.matchAll(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/gi)){
+     const nm=(m[1].match(/\bname=["']([^"']*)["']/i)||[])[1]||"";
+     textareas.push({name:nm,value:decodeHtml(m[2]).trim().slice(0,1000)});
    }
-   return json({
-     ok:true,version:"0.11.4-structure",status:res.status,htmlBytes:h.length,
-     counts:{
-       cardDetailLinks:(h.match(/card-search\/details\.php/gi)||[]).length,
-       cardWord:(h.match(/card/gi)||[]).length,
-       deckWord:(h.match(/deck/gi)||[]).length,
-       dataAttrs:(h.match(/\bdata-[\w-]+=/gi)||[]).length,
-       scripts:(h.match(/<script\b/gi)||[]).length,
-       inputs:(h.match(/<input\b/gi)||[]).length
-     },
-     matchedAttributes:attrs,
-     structuralHits:hits
-   });
+   const selects=[];
+   for(const m of h.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/gi)){
+     const nm=(m[1].match(/\bname=["']([^"']*)["']/i)||[])[1]||"";
+     selects.push({name:nm,html:m[2].replace(/\s+/g," ").trim().slice(0,1000)});
+   }
+   return json({ok:true,version:"0.11.5-inputs",status:res.status,htmlBytes:h.length,
+     inputCount:inputs.length,inputs,textareaCount:textareas.length,textareas,
+     selectCount:selects.length,selects});
  }catch(e){return json({ok:false,error:String(e&&e.message||e)},500);}
 }
 
