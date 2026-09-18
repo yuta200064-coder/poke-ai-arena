@@ -2,7 +2,7 @@ const OFFICIAL = "https://www.pokemon-card.com";
 const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#07111c">
-<title>Poké AI Arena v0.12.4</title>
+<title>Poké AI Arena v0.12.5</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:#050b12;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden}
 #app{height:100dvh;display:flex;flex-direction:column}.top{height:45px;padding:calc(5px + env(safe-area-inset-top)) 12px 5px;background:#08111c;display:flex;align-items:center;justify-content:space-between}.top button{background:#1d2b3d;color:#fff;border:0;border-radius:9px;padding:7px 10px}
@@ -48,7 +48,7 @@ const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 .bench .card{box-shadow:0 2px 7px #0009}
 @media(max-height:700px){.handbox{height:18dvh;min-height:116px}.hc{min-width:64px;width:64px;height:92px}.actions button{width:48px;height:48px}}
 </style></head><body>
-<div id=app><div class=top><b>Poké AI Arena <small>v0.12.4</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
+<div id=app><div class=top><b>Poké AI Arena <small>v0.12.5</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
 <div class=mat><div class=mid></div><div class=stadium>STADIUM</div>
 <div class="sideCount aiSide">SIDE<br><b id=aSideN>6</b></div><div class="sideCount pSide">SIDE<br><b id=pSideN>6</b></div>
 <div class="zone battle" id=aBattle>Battle</div><div class="zone battle" id=pBattle>Battle</div>
@@ -259,54 +259,92 @@ function clean(s){return decodeHtml((s||"").replace(/<[^>]*>/g," ")).replace(/\s
 
 async function deckDebugApi(url){
  const code=(url.searchParams.get("code")||"").trim();
- const path="/assets/js/deck/resultView2.js?v=240209";
+ const result=await extractOfficialDeck(code);
+ return json(result,result.ok?200:422);
+}
+
+function decodeHtml(s){
+ return String(s||"").replace(/&quot;/g,'"').replace(/&#39;|&#x27;/gi,"'")
+ .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">");
+}
+function inputValue(html,id){
+ const re=new RegExp("<input\\b[^>]*\\bid=[\"']"+id+"[\"'][^>]*>","i");
+ const m=html.match(re); if(!m)return "";
+ const v=m[0].match(/\bvalue=["']([^"']*)["']/i);
+ return v?decodeHtml(v[1]):"";
+}
+function parseDeckField(value,category){
+ if(!value)return [];
+ return value.split("-").filter(Boolean).map(part=>{
+   const p=part.split("_"), id=String(p[0]||"").trim(), count=parseInt(p[1],10);
+   return {id,count:Number.isFinite(count)?count:0,category};
+ }).filter(x=>x.id&&x.count>0);
+}
+function cardMaster(html){
+ const names={},alts={},images={};
+ for(const m of html.matchAll(/PCGDECK\.searchItemName\[(\d+)\]\s*=\s*'((?:\\'|[^'])*)'/g))
+   names[m[1]]=m[2].replace(/\\'/g,"'");
+ for(const m of html.matchAll(/PCGDECK\.searchItemNameAlt\[(\d+)\]\s*=\s*'((?:\\'|[^'])*)'/g))
+   alts[m[1]]=m[2].replace(/\\'/g,"'");
+ for(const m of html.matchAll(/PCGDECK\.searchItemCardPict\[(\d+)\]\s*=\s*'((?:\\'|[^'])*)'/g))
+   images[m[1]]=m[2].replace(/\\'/g,"'");
+ return {names,alts,images};
+}
+async function extractOfficialDeck(code){
+ if(!/^[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+$/.test(code))
+   return {ok:false,error:"デッキコードの形式が正しくありません"};
+ const target=`${OFFICIAL}/deck/result.html/deckID/${encodeURIComponent(code)}/`;
  try{
-   const r=await fetch(OFFICIAL+path,{headers:{
-     "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1",
-     "Accept":"*/*","Referer":`${OFFICIAL}/deck/result.html/deckID/${encodeURIComponent(code)}/`
-   }});
-   const t=await r.text();
-   const needle="PCGDECK.cardTableMake=function";
-   const p=t.indexOf(needle);
-   if(p<0) return json({ok:false,version:"0.12.4-cardTableMake",error:"function not found"},422);
-   const chunk=t.slice(p,Math.min(t.length,p+9000));
-   return json({ok:true,version:"0.12.4-cardTableMake",status:r.status,
-     functionPreview:chunk.replace(/\s+/g," ").slice(0,8500)});
- }catch(e){return json({ok:false,error:String(e&&e.message||e)},500);}
+  const r=await fetch(target,{redirect:"follow",headers:{
+   "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+   "Accept":"text/html,application/xhtml+xml","Accept-Language":"ja-JP,ja;q=0.9"
+  }});
+  const h=await r.text();
+  if(!r.ok)return {ok:false,error:"公式ページの取得に失敗しました",status:r.status};
+  const fields=[
+   ["deck_pke","ポケモン"],["deck_gds","グッズ"],["deck_tool","ポケモンのどうぐ"],
+   ["deck_tech","ワザマシン"],["deck_sup","サポート"],["deck_sta","スタジアム"],
+   ["deck_ene","エネルギー"],["deck_ene_b","基本エネルギー"],["deck_ajs","その他"]
+  ];
+  let raw=[];
+  const fieldValues={};
+  for(const [id,cat] of fields){
+    const v=inputValue(h,id); fieldValues[id]=v;
+    raw.push(...parseDeckField(v,cat));
+  }
+  // Also discover any deck_* inputs we did not know in advance.
+  for(const m of h.matchAll(/<input\b[^>]*\bid=["'](deck_[A-Za-z0-9_]+)["'][^>]*>/gi)){
+    const id=m[1]; if(Object.prototype.hasOwnProperty.call(fieldValues,id))continue;
+    const v=(m[0].match(/\bvalue=["']([^"']*)["']/i)||[])[1]||"";
+    fieldValues[id]=decodeHtml(v);
+    raw.push(...parseDeckField(fieldValues[id],id));
+  }
+  // De-duplicate same category/id pairs caused by aliases, without inventing counts.
+  const merged=new Map();
+  for(const x of raw){
+    const key=x.category+"|"+x.id;
+    if(!merged.has(key))merged.set(key,x);
+  }
+  raw=[...merged.values()];
+  const master=cardMaster(h);
+  const cards=raw.map(x=>{
+    const full=master.names[x.id]||master.alts[x.id]||"";
+    const mm=full.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+    const image=master.images[x.id]||"";
+    return {...x,name:mm?mm[1]:full,printing:mm?mm[2]:"",image:image?(image.startsWith("http")?image:OFFICIAL+image):""};
+  });
+  const total=cards.reduce((s,x)=>s+x.count,0);
+  return {ok:total===60,version:"0.12.5-real-deck-parser",code,total,
+    uniqueCards:cards.length,cards,
+    error:total===60?undefined:`解析結果が${total}枚でした。60枚でないため保存しません。`,
+    diagnostic:total===60?undefined:{fieldValues}};
+ }catch(e){return {ok:false,error:String(e&&e.message||e)}}
 }
 
 async function deckApi(url){
  const code=(url.searchParams.get("code")||"").trim();
- if(!/^[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+$/.test(code))
-   return json({ok:false,error:"デッキコードの形式が正しくありません"},400);
-
- // The official site currently exposes deck codes through both result.html and
- // confirm.html. result.html is tried first because its list view contains the
- // human-readable card rows; confirm.html is retained as a compatibility fallback.
- const targets=[
-   `${OFFICIAL}/deck/result.html/deckID/${encodeURIComponent(code)}/`,
-   `${OFFICIAL}/deck/confirm.html/deckID/${encodeURIComponent(code)}/`
- ];
- let lastStatus=0, diagnostics=[];
- for(const target of targets){
-   let res;
-   try{
-     res=await fetch(target,{redirect:"follow",headers:{
-       "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
-       "Accept":"text/html,application/xhtml+xml",
-       "Accept-Language":"ja-JP,ja;q=0.9"
-     }});
-   }catch(e){diagnostics.push({target,error:"fetch"});continue}
-   lastStatus=res.status;
-   if(!res.ok){diagnostics.push({target,http:res.status});continue}
-   const h=await res.text();
-   const parsed=parseOfficialDeckHtml(h);
-   diagnostics.push({target,htmlBytes:h.length,rows:parsed.cards.length,total:parsed.total,method:parsed.method});
-   if(parsed.total===60){
-     return json({ok:true,code,total:60,cards:parsed.cards,officialDeckUrl:target,parser:parsed.method});
-   }
- }
- return json({ok:false,error:"公式ページには接続できましたが、60枚を確実に解析できませんでした。誤ったデッキには置き換えません。",diagnostic:{lastStatus,attempts:diagnostics}},422);
+ const result=await extractOfficialDeck(code);
+ return json(result,result.ok?200:422);
 }
 
 function parseOfficialDeckHtml(h){
