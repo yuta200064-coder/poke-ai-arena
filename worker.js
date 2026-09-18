@@ -2,7 +2,7 @@ const OFFICIAL = "https://www.pokemon-card.com";
 const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#07111c">
-<title>Poké AI Arena v0.12.1</title>
+<title>Poké AI Arena v0.12.2</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:#050b12;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden}
 #app{height:100dvh;display:flex;flex-direction:column}.top{height:45px;padding:calc(5px + env(safe-area-inset-top)) 12px 5px;background:#08111c;display:flex;align-items:center;justify-content:space-between}.top button{background:#1d2b3d;color:#fff;border:0;border-radius:9px;padding:7px 10px}
@@ -48,7 +48,7 @@ const APP_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 .bench .card{box-shadow:0 2px 7px #0009}
 @media(max-height:700px){.handbox{height:18dvh;min-height:116px}.hc{min-width:64px;width:64px;height:92px}.actions button{width:48px;height:48px}}
 </style></head><body>
-<div id=app><div class=top><b>Poké AI Arena <small>v0.12.1</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
+<div id=app><div class=top><b>Poké AI Arena <small>v0.12.2</small></b><span id=status>SETUP</span><button id=menu>☰</button></div>
 <div class=mat><div class=mid></div><div class=stadium>STADIUM</div>
 <div class="sideCount aiSide">SIDE<br><b id=aSideN>6</b></div><div class="sideCount pSide">SIDE<br><b id=pSideN>6</b></div>
 <div class="zone battle" id=aBattle>Battle</div><div class="zone battle" id=pBattle>Battle</div>
@@ -259,32 +259,25 @@ function clean(s){return decodeHtml((s||"").replace(/<[^>]*>/g," ")).replace(/\s
 
 async function deckDebugApi(url){
  const code=(url.searchParams.get("code")||"").trim();
- const jsFiles=[
-   "/assets/js/deck/resultView2.js?v=240209",
-   "/assets/js/deck/resultView-sp.js?v=230606",
-   "/assets/js/deck/confirm.js?v=22082210"
- ];
- const results=[];
- for(const path of jsFiles){
-   try{
-     const r=await fetch(OFFICIAL+path,{headers:{
-       "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1",
-       "Accept":"*/*","Referer":`${OFFICIAL}/deck/result.html/deckID/${encodeURIComponent(code)}/`
-     }});
-     const t=await r.text(), hits=[];
-     const patterns=[
-       /(?:ajax|fetch|\$\.get|\$\.post|XMLHttpRequest)[\s\S]{0,500}/gi,
-       /(?:url\s*:|\/deck\/|\.php|\.json|deckID|cardListView|viewItemMode)[\s\S]{0,450}/gi
-     ];
-     for(const p of patterns) for(const m of t.matchAll(p)){
-       const s=m[0].replace(/\s+/g," ").slice(0,650);
-       if(!hits.includes(s)) hits.push(s);
-       if(hits.length>=80) break;
+ const path="/assets/js/deck/resultView2.js?v=240209";
+ try{
+   const r=await fetch(OFFICIAL+path,{headers:{
+     "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1",
+     "Accept":"*/*","Referer":`${OFFICIAL}/deck/result.html/deckID/${encodeURIComponent(code)}/`
+   }});
+   const t=await r.text();
+   const keys=["cardListView","deck_tech","viewItemMode","deckThumbsImage.php","cardItemAppendAll"];
+   const contexts={};
+   for(const key of keys){
+     contexts[key]=[];
+     let pos=0;
+     while((pos=t.indexOf(key,pos))>=0 && contexts[key].length<20){
+       contexts[key].push(t.slice(Math.max(0,pos-1800),Math.min(t.length,pos+4200)).replace(/\s+/g," "));
+       pos+=key.length;
      }
-     results.push({path,status:r.status,bytes:t.length,hits:hits.slice(0,80)});
-   }catch(e){results.push({path,error:String(e&&e.message||e)});}
- }
- return json({ok:true,version:"0.12.1-js-network",code,results});
+   }
+   return json({ok:true,version:"0.12.2-render-function",status:r.status,bytes:t.length,contexts});
+ }catch(e){return json({ok:false,error:String(e&&e.message||e)},500);}
 }
 
 async function deckApi(url){
